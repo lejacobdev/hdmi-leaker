@@ -149,3 +149,100 @@ def reconstruct_frame(
         frame_height=frame_height,
         confidence=float(np.sqrt(max(conf_h, 0.0) * max(conf_v, 0.0))),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Real SDR captures
+# --------------------------------------------------------------------------- #
+def samples_per_line(sample_rate: float, timing) -> float:
+    """Samples per scan line for a capture at ``sample_rate`` (Hz).
+
+    This is the crux for real captures: you sample at the SDR's rate, not the
+    pixel clock, so one scan line spans ``sample_rate / line_rate`` complex
+    samples (generally fractional). ``timing.line_rate_hz`` is the horizontal
+    (line) frequency of the mode.
+    """
+    return float(sample_rate) / timing.line_rate_hz
+
+
+def _resample_1d(x: np.ndarray, out_len: int) -> np.ndarray:
+    if out_len <= 0 or x.size < 2:
+        return np.zeros(max(out_len, 0), dtype=x.dtype)
+    idx = np.linspace(0.0, x.size - 1.0, out_len)
+    return np.interp(idx, np.arange(x.size), x)
+
+
+def _align_roll(frame: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    """Roll ``frame`` to best match ``ref`` using row/column energy correlation."""
+    def best_shift(a, b):
+        n = a.size
+        fa = np.fft.rfft(a - a.mean(), 2 * n)
+        fb = np.fft.rfft(b - b.mean(), 2 * n)
+        xc = np.fft.irfft(fa * np.conj(fb), 2 * n)
+        xc = np.concatenate([xc[-(n - 1):], xc[:n]])
+        return int(np.argmax(xc)) - (n - 1)
+
+    sy = best_shift(ref.sum(axis=1), frame.sum(axis=1))
+    sx = best_shift(ref.sum(axis=0), frame.sum(axis=0))
+    return np.roll(np.roll(frame, sy, axis=0), sx, axis=1)
+
+
+def reconstruct_capture(
+    iq: np.ndarray,
+    timing,
+    sample_rate: float,
+    frames_avg: int = 1,
+    deskew: bool = True,
+) -> ReconstructResult:
+    """Reconstruct a ghost frame from a *real* SDR capture.
+
+    Unlike :func:`reconstruct_frame` (which assumes integer samples-per-pixel
+    relative to the pixel clock), this derives the line geometry from the
+    capture ``sample_rate`` and the mode's horizontal frequency, resamples so
+    each line lands on an integer column, and — if the capture spans several
+    frames — coherently averages aligned frames to suppress noise.
+
+    The horizontal resolution is limited by your SDR bandwidth: with a HackRF
+    (~20 MHz) expect a few hundred columns and a noisy result, legible mainly
+    for high-contrast content. This is a classical pipeline, not the deep-learnt
+    denoising of the Deep-TEMPEST project.
+    """
+    mag = np.abs(np.asarray(iq)).astype(np.float64)
+    spl = samples_per_line(sample_rate, timing)
+    if spl < 2:
+        raise ValueError(
+            f"sample_rate too low for this mode: {spl:.2f} samples/line. "
+            "Increase the SDR sample rate."
+        )
+    width = int(round(spl))
+    height = timing.v_total
+
+    total_lines = int(mag.size // spl)
+    if total_lines < height:
+        # Not even one full frame: resample what we have into a short image.
+        rs = _resample_1d(mag, width * max(total_lines, 1))
+        frame = _fold(rs, width, max(total_lines, 1))
+        if deskew:
+            frame = _deskew(frame)
+        return ReconstructResult(_normalise(frame), width, max(total_lines, 1), 0.0)
+
+    # Resample so every line is exactly `width` samples (removes fractional drift).
+    rs = _resample_1d(mag[: int(total_lines * spl)], width * total_lines)
+    n_frames = total_lines // height
+
+    if frames_avg > 1 and n_frames >= 2:
+        k = min(frames_avg, n_frames)
+        frames = rs[: k * height * width].reshape(k, height, width)
+        ref = frames[0]
+        acc = ref.astype(np.float64).copy()
+        for i in range(1, k):
+            acc += _align_roll(frames[i], ref)
+        frame = acc / k
+        conf = 1.0
+    else:
+        frame = rs[: height * width].reshape(height, width)
+        conf = 0.5
+
+    if deskew:
+        frame = _deskew(frame)
+    return ReconstructResult(_normalise(frame), width, height, conf)

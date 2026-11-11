@@ -20,6 +20,25 @@ from __future__ import annotations
 
 import numpy as np
 
+def samples_for_frames(timing, sample_rate: float, frames: float) -> int:
+    """How many complex samples span ``frames`` full video frames at this rate.
+
+    One frame lasts ``1 / refresh`` seconds, so ``sample_rate / refresh`` samples.
+    Capture a few frames so the reconstructor can average them to beat noise.
+    """
+    return int(round(sample_rate / timing.refresh_hz * frames))
+
+
+def harmonic_hint(timing, n: int = 3) -> float:
+    """A reasonable starting tune frequency: the n-th pixel-clock harmonic.
+
+    The fundamental often sits below usable range or in noisy bands; the 2nd–5th
+    harmonic is a common starting point. You will still need to hand-tune around
+    it and watch the spectrum for the strongest periodic content.
+    """
+    return timing.pixel_clock_hz * n
+
+
 _AUTH_NOTICE = (
     "[authorization] Live SDR capture is for equipment you own or are "
     "explicitly authorized to test. Intercepting third-party emanations is "

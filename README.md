@@ -98,6 +98,46 @@ python -m tempest_visualizer simulate --mode 800x600@60 --snr 15 --out leak.cf32
 python -m tempest_visualizer reconstruct leak.cf32 --mode 800x600@60 --out ghost.png
 ```
 
+## Working from a real SDR capture (HackRF etc.) — your own equipment
+
+Reconstructing the *actual* emanations of a display is a physical-layer RF task.
+It is lawful only for equipment **you own or are explicitly authorized to test**,
+and the capture path is gated behind `--i-am-authorized` for that reason.
+
+**Reality check.** A HackRF gives ~20 MHz of bandwidth; HDMI emanations are far
+wider, so you capture a slice around one harmonic of the pixel clock. Expect a
+**noisy ghost**, legible mainly for low resolutions and high-contrast content
+(menus, text) — not a clean video stream. The proven, deep-learning-denoised
+pipeline for this is the **`gr-tempest` / Deep-TEMPEST** GNU Radio project; use
+that if you need the best possible result. This toolkit implements the classical
+(no-ML) version.
+
+Key idea: with an SDR you sample at the *radio's* rate, not the pixel clock, so
+one scan line spans `sample_rate / line_rate` samples. The `reconstruct` command
+derives the geometry from `--sample-rate`, and averaging several frames beats
+down noise.
+
+```bash
+# 1) Capture a few frames from your own source (needs SoapySDR + SoapyHackRF).
+#    Tune near a pixel-clock harmonic and hand-adjust while watching the result.
+python -m tempest_visualizer capture \
+    --sample-rate 20e6 --freq 195e6 --num-samples 20000000 \
+    --device driver=hackrf --i-am-authorized --out ps.cf32
+
+# 2) Reconstruct, telling it the mode and the capture rate; average frames.
+python -m tempest_visualizer reconstruct ps.cf32 \
+    --mode 640x480@60 --sample-rate 20e6 --frames-avg 8 --out ps.png
+
+# Or do both continuously (writes a rolling PNG you can watch):
+python -m tempest_visualizer live-sdr \
+    --mode 640x480@60 --sample-rate 20e6 --device driver=hackrf \
+    --i-am-authorized --out sdr_live.png
+```
+
+Tuning tips: start at the 2nd–5th harmonic of the mode's pixel clock, raise the
+sample rate for more horizontal resolution, and prefer a low-resolution output
+mode on the source to fit more of each line into the HackRF's bandwidth.
+
 ## How it works
 
 1. **Timing** (`timing.py`) — every video mode sends visible pixels *plus*

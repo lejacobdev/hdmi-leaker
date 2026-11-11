@@ -68,6 +68,40 @@ def test_countermeasure_reduces_signal_at_fixed_floor():
     assert drop_db < -6.0
 
 
+def test_samples_per_line_matches_rate():
+    from tempest_visualizer.reconstruct import samples_per_line
+    t = get_timing("640x480@60")
+    spl = samples_per_line(20e6, t)
+    # 20 Msps / line_rate; line_rate = pixel_clock / h_total
+    assert abs(spl - 20e6 / t.line_rate_hz) < 1e-6
+    assert 600 < spl < 650
+
+
+def test_reconstruct_capture_geometry_and_averaging():
+    from tempest_visualizer.reconstruct import reconstruct_capture
+    t = get_timing("640x480@60")
+    img = synthetic.make_screen(t.h_active, t.v_active).astype(float) / 255.0
+    frames = 3
+    base = np.concatenate([
+        simulate_emanation(img, t, EmanationParams(snr_db=40, seed=s)) for s in range(frames)
+    ])
+    sdr_rate = 20e6
+    out_len = int(len(base) * sdr_rate / t.pixel_clock_hz)
+    idx = np.linspace(0, len(base) - 1, out_len)
+    cap = (np.interp(idx, np.arange(len(base)), base.real)
+           + 1j * np.interp(idx, np.arange(len(base)), base.imag)).astype(np.complex64)
+    res = reconstruct_capture(cap, t, sdr_rate, frames_avg=3)
+    assert res.image.shape == (t.v_total, round(sdr_rate / t.line_rate_hz))
+    assert 0.0 <= res.image.min() and res.image.max() <= 1.0
+
+
+def test_samples_for_frames():
+    from tempest_visualizer.capture import samples_for_frames
+    t = get_timing("640x480@60")
+    n = samples_for_frames(t, 20e6, 2)
+    assert abs(n - 2 * 20e6 / t.refresh_hz) < 20e6  # ~ right order
+
+
 def test_iq_roundtrip_formats(tmp_path):
     iq = (np.random.randn(1000) + 1j * np.random.randn(1000)).astype(np.complex64)
     for ext in (".cf32", ".cs16", ".npy"):

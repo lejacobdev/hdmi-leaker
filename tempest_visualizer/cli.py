@@ -79,6 +79,22 @@ def cmd_simulate(args) -> int:
 
 def cmd_reconstruct(args) -> int:
     iq = iqio.load_iq(args.iq)
+
+    # Real SDR capture: geometry comes from the capture sample rate.
+    if args.sample_rate:
+        if not args.mode:
+            print("--sample-rate needs --mode (to know the line/frame rate).",
+                  file=sys.stderr)
+            return 2
+        from .reconstruct import reconstruct_capture
+        t = get_timing(args.mode)
+        res = reconstruct_capture(iq, t, args.sample_rate, frames_avg=args.frames_avg)
+        imio.save_gray(args.out, res.image)
+        print(f"reconstructed capture {res.image.shape[1]}x{res.image.shape[0]} "
+              f"(samples/line~{res.line_length}, frames averaged={args.frames_avg}) "
+              f"-> {args.out}")
+        return 0
+
     ll = args.line_length
     fh = args.frame_height
     if args.mode and (ll is None or fh is None):
@@ -227,6 +243,47 @@ def _sleep(s):
     time.sleep(s)
 
 
+def cmd_live_sdr(args) -> int:
+    """Continuous capture -> reconstruct from an SDR (e.g. HackRF) you are
+    authorized to test. Writes a rolling PNG you can watch, and optionally keeps
+    every frame. For your own equipment only."""
+    from .capture import capture_block, samples_for_frames, harmonic_hint
+    from .reconstruct import reconstruct_capture
+    import os
+
+    timing = get_timing(args.mode)
+    freq = args.freq if args.freq else harmonic_hint(timing, args.harmonic)
+    n = samples_for_frames(timing, args.sample_rate, args.frames_per_block)
+    print(f"live-sdr  mode={timing.name}  rate={args.sample_rate/1e6:.1f} Msps  "
+          f"tune={freq/1e6:.3f} MHz  {args.frames_per_block} frame(s)/block")
+    print("  tip: watch the output PNG update; hand-tune --freq around pixel-clock "
+          "harmonics and raise --sample-rate for more horizontal resolution.")
+    if args.save_dir:
+        os.makedirs(args.save_dir, exist_ok=True)
+
+    i = 0
+    try:
+        while args.blocks == 0 or i < args.blocks:
+            try:
+                iq = capture_block(
+                    sample_rate=args.sample_rate, center_freq=freq, num_samples=n,
+                    gain_db=args.gain, device_args=args.device,
+                    confirm_authorized=args.i_am_authorized)
+            except (PermissionError, RuntimeError) as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            res = reconstruct_capture(iq, timing, args.sample_rate,
+                                      frames_avg=args.frames_per_block)
+            imio.save_gray(args.out, res.image)
+            if args.save_dir:
+                imio.save_gray(os.path.join(args.save_dir, f"sdr_{i:05d}.png"), res.image)
+            print(f"  block {i:05d}  {res.image.shape[1]}x{res.image.shape[0]} -> {args.out}")
+            i += 1
+    except KeyboardInterrupt:
+        print("\nstopped.")
+    return 0
+
+
 def cmd_gui(args) -> int:
     try:
         from .gui import run as run_gui
@@ -246,14 +303,18 @@ def cmd_gui(args) -> int:
 
 def cmd_capture(args) -> int:
     from .capture import capture_block
-    iq = capture_block(
-        sample_rate=args.sample_rate,
-        center_freq=args.freq,
-        num_samples=args.num_samples,
-        gain_db=args.gain,
-        device_args=args.device,
-        confirm_authorized=args.i_am_authorized,
-    )
+    try:
+        iq = capture_block(
+            sample_rate=args.sample_rate,
+            center_freq=args.freq,
+            num_samples=args.num_samples,
+            gain_db=args.gain,
+            device_args=args.device,
+            confirm_authorized=args.i_am_authorized,
+        )
+    except (PermissionError, RuntimeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     iqio.save_iq(args.out, iq)
     print(f"captured {iq.size} samples -> {args.out}")
     return 0
@@ -310,6 +371,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--spp", type=int, default=1)
     sp.add_argument("--line-length", type=int, default=None)
     sp.add_argument("--frame-height", type=int, default=None)
+    sp.add_argument("--sample-rate", type=float, default=None,
+                    help="SDR capture sample rate (Hz); use with --mode for real captures")
+    sp.add_argument("--frames-avg", type=int, default=1,
+                    help="average this many captured frames to suppress noise")
     sp.set_defaults(func=cmd_reconstruct)
 
     sp = sub.add_parser("demo", help="end-to-end image -> IQ -> ghost")
@@ -342,6 +407,28 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--max-fps", type=float, default=10.0, help="cap processing rate")
     sp.add_argument("--save-dir", default=None, help="write paired PNG frames here")
     sp.set_defaults(func=cmd_live)
+
+    sp = sub.add_parser(
+        "live-sdr",
+        help="continuous SDR (HackRF) capture -> reconstruct, for equipment you own",
+    )
+    sp.add_argument("--mode", default="640x480@60",
+                    help="display mode of the source (lower res = better with HackRF BW)")
+    sp.add_argument("--sample-rate", type=float, default=20e6, help="SDR sample rate Hz")
+    sp.add_argument("--freq", type=float, default=0.0,
+                    help="tune frequency Hz (0 = suggest a pixel-clock harmonic)")
+    sp.add_argument("--harmonic", type=int, default=3,
+                    help="which pixel-clock harmonic to suggest when --freq is 0")
+    sp.add_argument("--gain", type=float, default=None)
+    sp.add_argument("--device", default="driver=hackrf", help="SoapySDR device args")
+    sp.add_argument("--frames-per-block", type=int, default=4,
+                    help="frames captured and averaged per reconstruction")
+    sp.add_argument("--blocks", type=int, default=0, help="number of blocks (0 = until Ctrl-C)")
+    sp.add_argument("--out", default="sdr_live.png", help="rolling output image")
+    sp.add_argument("--save-dir", default=None, help="also keep every block's PNG")
+    sp.add_argument("--i-am-authorized", action="store_true",
+                    help="acknowledge you own or are authorized to test the source")
+    sp.set_defaults(func=cmd_live_sdr)
 
     sp = sub.add_parser("gui", help="launch the graphical visualizer")
     sp.set_defaults(func=cmd_gui)

@@ -68,9 +68,28 @@ python -m tempest_visualizer demo --image my_screen.png --mode 1920x1080@60 --ou
 # Measure a countermeasure (TEMPEST-safe-font style low-pass)
 python -m tempest_visualizer countermeasure --mode 1024x768@60 --snr 12 --cutoff 0.10
 
-# Launch the graphical visualizer (needs Tk)
+# Live feed: capture YOUR OWN screen, simulate leakage, reconstruct — in a loop
+python -m tempest_visualizer live --mode 1024x768@60 --snr 16
+#   (install 'mss' for real screen capture; otherwise an animated synthetic
+#    screen is used so it still runs on a headless box)
+
+# Launch the graphical visualizer (needs Tk); has a "Live ▶" button
 python -m tempest_visualizer gui
 ```
+
+### Live feed — what it captures
+
+The frames that become your monitor's HDMI output are your machine's
+*framebuffer*. The `live` command (and the GUI's **Live ▶** button) grab that
+framebuffer — an ordinary screen capture of **the machine it runs on** — and
+push each frame through the forward model + reconstruction so you watch the
+ghost update as your screen changes.
+
+This is screen mirroring into the simulator. It does **not** read an HDMI cable
+or pull a picture out of the air, and it only ever sees its own host's display.
+To work with the *actual electromagnetic emanations* of equipment **you own or
+are authorized to test**, record IQ with an SDR (see `capture`) and feed it to
+`reconstruct`.
 
 Separate the stages when working from recorded IQ:
 
@@ -118,6 +137,7 @@ tempest_visualizer/
   countermeasures.py low-pass mitigation + leakage metrics
   iqio.py            SDR IQ file formats
   synthetic.py       generate test "screen" images
+  livefeed.py        live screen-capture source + per-frame processing
   capture.py         optional SoapySDR live capture (authorized self-test)
   cli.py / gui.py    command line + Tkinter GUI
 tests/               pytest round-trip and physics-invariant tests

@@ -17,6 +17,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Real screen capture for the live feed (else a synthetic source is used).
+live = ["mss>=9"]
 # Live capture from a radio you own / are authorized to test.
 sdr = ["SoapySDR"]
 dev = ["pytest>=7"]

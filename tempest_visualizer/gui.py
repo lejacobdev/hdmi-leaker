@@ -81,7 +81,10 @@ def run() -> None:  # pragma: no cover - interactive
     from . import countermeasures, synthetic
     from . import imageio_simple as imio
 
-    state = {"image": None, "iq": None, "photos": {}}
+    from .livefeed import open_source, LiveProcessor
+    from .emanation import EmanationParams as _EP
+
+    state = {"image": None, "iq": None, "photos": {}, "live": None, "source": None}
 
     root = tk.Tk()
     root.title("TEMPEST / Deep-TEMPEST Visualizer — research & defense")
@@ -197,9 +200,66 @@ def run() -> None:  # pragma: no cover - interactive
         imio.save_gray(path, res.image)
         status.set(f"Saved reconstruction to {path}")
 
+    def _live_tick():
+        if state["live"] is None:
+            return
+        source, proc = state["live"]
+        try:
+            frame = source.grab()
+            lf = proc.process(frame)
+        except Exception as exc:
+            status.set(f"live stopped: {exc}")
+            stop_live()
+            return
+        show("source", _mag_to_image(frame))
+        show("spectrum", _spectrum_image(lf.iq))
+        show("waterfall", _waterfall_image(lf.iq, proc.timing.h_total * proc.params.samples_per_pixel))
+        show("recon", _mag_to_image(lf.recon.image))
+        score = countermeasures.leakage_score(np.asarray(frame, float) / 255.0, lf.recon.image)
+        status.set(f"LIVE via {source.name}  {lf.fps:4.1f} fps  "
+                   f"line_len={lf.recon.line_length} frame_h={lf.recon.frame_height}  "
+                   f"leakage={score:.2f}")
+        state["after"] = root.after(80, _live_tick)
+
+    def stop_live():
+        if state.get("after"):
+            try:
+                root.after_cancel(state["after"])
+            except Exception:
+                pass
+            state["after"] = None
+        if state["live"] is not None:
+            try:
+                state["live"][0].close()
+            except Exception:
+                pass
+            state["live"] = None
+        live_btn.config(text="Live ▶")
+
+    def toggle_live():
+        if state["live"] is not None:
+            stop_live()
+            status.set("live stopped.")
+            return
+        timing = get_timing(mode_var.get())
+        try:
+            source = open_source(prefer="auto",
+                                 downscale_to=(timing.v_active, timing.h_active))
+        except Exception as exc:
+            messagebox.showerror("Live unavailable", str(exc))
+            return
+        proc = LiveProcessor(timing, _EP(snr_db=float(snr_var.get())),
+                             blind=blind_var.get(), samples_per_pixel=int(spp_var.get()))
+        state["live"] = (source, proc)
+        live_btn.config(text="Stop ■")
+        _live_tick()
+
     for text, cmd in [("Load image…", load_image), ("Synthetic", use_synthetic),
                       ("Run ▶", run_pipeline), ("Save ghost…", save_recon)]:
         ttk.Button(ctrl, text=text, command=cmd).pack(side=tk.RIGHT, padx=3)
+    live_btn = ttk.Button(ctrl, text="Live ▶", command=toggle_live)
+    live_btn.pack(side=tk.RIGHT, padx=3)
+    root.protocol("WM_DELETE_WINDOW", lambda: (stop_live(), root.destroy()))
 
     bar = ttk.Frame(root, padding=(8, 2))
     bar.pack(side=tk.BOTTOM, fill=tk.X)

@@ -161,6 +161,72 @@ def cmd_countermeasure(args) -> int:
     return 0
 
 
+def cmd_live(args) -> int:
+    """Live feed: capture your own screen, simulate leakage, reconstruct — loop.
+
+    Headless: prints per-frame detection stats and optionally saves paired
+    frames. Captures only the display of the machine it runs on.
+    """
+    from .livefeed import open_source, LiveProcessor
+    import os
+
+    timing = get_timing(args.mode)
+    down = (timing.v_active, timing.h_active)
+    try:
+        source = open_source(prefer=args.source, downscale_to=down, monitor=args.monitor)
+    except Exception as exc:
+        print(f"could not open a frame source: {exc}", file=sys.stderr)
+        return 2
+    print(f"live feed via '{source.name}' source  mode={timing.name}  "
+          f"{'blind' if args.blind else 'assisted'}  (Ctrl-C to stop)")
+    if source.name == "synthetic":
+        print("  note: no real screen capture backend found — showing an "
+              "animated synthetic screen. Install 'mss' for real capture.")
+
+    proc = LiveProcessor(timing, _params_from(args), blind=args.blind,
+                         samples_per_pixel=args.spp)
+    if args.save_dir:
+        os.makedirs(args.save_dir, exist_ok=True)
+
+    min_dt = 1.0 / args.max_fps if args.max_fps > 0 else 0.0
+    n = 0
+    try:
+        while args.frames == 0 or n < args.frames:
+            t0 = _now()
+            frame = source.grab()
+            lf = proc.process(frame)
+            r = lf.recon
+            score = countermeasures.leakage_score(
+                np.asarray(frame, float) / 255.0, r.image)
+            print(f"  frame {n:04d}  {lf.fps:5.1f} fps  "
+                  f"line_len={r.line_length} frame_h={r.frame_height} "
+                  f"conf={r.confidence:.2f}  leakage={score:.2f}")
+            if args.save_dir:
+                _save_sidebyside(
+                    os.path.join(args.save_dir, f"live_{n:04d}.png"),
+                    frame, r.image,
+                    labels=("captured screen", f"reconstructed (leak={score:.2f})"))
+            n += 1
+            dt = _now() - t0
+            if min_dt and dt < min_dt:
+                _sleep(min_dt - dt)
+    except KeyboardInterrupt:
+        print("\nstopped.")
+    finally:
+        source.close()
+    return 0
+
+
+def _now():
+    import time
+    return time.time()
+
+
+def _sleep(s):
+    import time
+    time.sleep(s)
+
+
 def cmd_gui(args) -> int:
     try:
         from .gui import run as run_gui
@@ -261,6 +327,21 @@ def build_parser() -> argparse.ArgumentParser:
                     help="low-pass cutoff (0..1); lower = stronger mitigation")
     sp.add_argument("--out", default="countermeasure.png")
     sp.set_defaults(func=cmd_countermeasure)
+
+    sp = sub.add_parser(
+        "live",
+        help="live feed: capture your own screen -> simulate leak -> reconstruct",
+    )
+    _add_emanation_args(sp)
+    sp.add_argument("--source", default="auto",
+                    choices=["auto", "mss", "imagegrab", "synthetic"],
+                    help="frame source (auto tries real capture, falls back to synthetic)")
+    sp.add_argument("--monitor", type=int, default=1, help="monitor index (mss)")
+    sp.add_argument("--blind", action="store_true", help="blind reconstruction")
+    sp.add_argument("--frames", type=int, default=0, help="number of frames (0 = until Ctrl-C)")
+    sp.add_argument("--max-fps", type=float, default=10.0, help="cap processing rate")
+    sp.add_argument("--save-dir", default=None, help="write paired PNG frames here")
+    sp.set_defaults(func=cmd_live)
 
     sp = sub.add_parser("gui", help="launch the graphical visualizer")
     sp.set_defaults(func=cmd_gui)

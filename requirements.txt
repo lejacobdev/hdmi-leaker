@@ -2,6 +2,10 @@
 numpy>=1.21
 pillow>=9.0
 
+# Optional: real screen capture for the live feed (falls back to a synthetic
+# animated source if absent). Cross-platform.
+#   pip install mss
+
 # Optional: live SDR capture for authorized self-assessment.
 # Install your platform's SoapySDR build + driver separately, then:
 #   pip install SoapySDR

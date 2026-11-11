@@ -1,0 +1,7 @@
+# Core runtime (CLI + GUI).
+numpy>=1.21
+pillow>=9.0
+
+# Optional: live SDR capture for authorized self-assessment.
+# Install your platform's SoapySDR build + driver separately, then:
+#   pip install SoapySDR

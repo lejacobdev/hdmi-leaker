@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tempest-visualizer"
+version = "0.1.0"
+description = "Educational, cross-platform TEMPEST / Deep-TEMPEST emanation simulator, reconstructor, and countermeasure evaluator."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "hdmi-leaker contributors" }]
+keywords = ["tempest", "emsec", "sdr", "side-channel", "security-research", "defensive"]
+dependencies = [
+    "numpy>=1.21",
+    "pillow>=9.0",
+]
+
+[project.optional-dependencies]
+# Live capture from a radio you own / are authorized to test.
+sdr = ["SoapySDR"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+tempest-visualizer = "tempest_visualizer.cli:main"
+
+[tool.setuptools]
+packages = ["tempest_visualizer"]

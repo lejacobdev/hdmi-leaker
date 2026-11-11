@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+*.cf32
+*.cs16
+*.cs8
+!docs/*.png
+.pytest_cache/
+.venv/
